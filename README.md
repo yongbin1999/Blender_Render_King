@@ -1,2 +1,2 @@
 # Blender_Render_King
-Blender远程渲染程序，支持WEB端操作和
+Blender远程渲染程序，支持远程WEB端操作和监视文件夹渲染
