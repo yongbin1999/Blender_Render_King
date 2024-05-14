@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Blender 渲染大王</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        form {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            max-width: 600px;
+            margin: auto;
+        }
+
+        label {
+            color: #555;
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        input[type="file"] {
+            opacity: 0;
+            /* 使文件输入透明，但仍可点击 */
+            position: absolute;
+            z-index: -1;
+        }
+
+        .file-input-label {
+            display: inline-block;
+            text-align: center;
+            background-color: #fff;
+            padding: 20px;
+            width: calc(100% - 40px);
+            /* 减去padding的宽度 */
+            border: 2px dashed #ddd;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
+            position: relative;
+            /* 为图标和文本提供定位上下文 */
+            z-index: 1;
+        }
+
+        .file-input-label:hover,
+        .dragover {
+            border-color: #999;
+            background-color: #e9e9e9;
+            /* 拖入文件时的背景色 */
+        }
+
+        .upload-icon {
+            display: block;
+            font-size: 24px;
+            /* 或根据需要调整大小 */
+            margin: 10px auto;
+        }
+
+        /* 调整因新标签加入而可能需要的其他元素样式 */
+        input[type="text"],
+        input[type="submit"],
+        #optionalFields {
+            margin-top: 20px;
+        }
+
+        input[type="file"]:hover {
+            border-color: #999;
+        }
+
+        input[type="text"],
+        input[type="submit"] {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+
+        input[type="submit"] {
+            background-color: #5cb85c;
+            color: white;
+            font-weight: bold;
+            border: none;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+
+        input[type="submit"]:hover {
+            background-color: #4cae4c;
+        }
+
+        #optionalFields,
+        #animationFields,
+        #imageFields {
+            margin-top: 20px;
+        }
+
+        .hide {
+            display: none;
+        }
+
+        .selectable {
+            user-select: all;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Blender 渲染大王</h1>
+    <form action="/upload" method="post" enctype="multipart/form-data" id="uploadForm">
+        <label for="blend-file" class="file-input-label">
+            拖入或点击上传一个 .blend 文件
+            <i class="upload-icon">📁</i>
+        </label>
+        <input type="file" id="blend-file" name="file" accept=".blend" required>
+        <!-- 文件上传 -->
+        <input type="file" id="file-upload" name="file[]" multiple>
+        <label for="file-upload">📁工程附加文件(暂不支持中文名)</label>
+
+        <!-- 文件夹上传 -->
+        <input type="file" id="folder-upload" name="folder" webkitdirectory directory multiple>
+        <label for="folder-upload">📁工程附加文件夹(暂不支持中文名)</label>
+
+        <div id="file-list"></div> <!-- 上传文件显示区域 -->
+
+
+        <div>
+            <input type="radio" id="render_type_image" name="render_type" value="image" checked
+                onchange="toggleRenderType()">
+            <label for="render_type_image">渲染图片</label>
+            <input type="radio" id="render_type_animation" name="render_type" value="animation"
+                onchange="toggleRenderType()">
+            <label for="render_type_animation">渲染动画</label>
+        </div>
+
+        <div>
+            <input type="checkbox" id="optionalSettings" onchange="toggleOptionalSettings()">
+            <label for="optionalSettings">显示可选设置(还没做完)</label>
+        </div>
+
+        <div id="optionalFields" class="hide">
+            <div id="animationFields" class="hide">
+                <label for="start_frame">首帧:</label>
+                <input type="text" id="start_frame" name="start_frame" placeholder="1">
+                <label for="end_frame">尾帧:</label>
+                <input type="text" id="end_frame" name="end_frame" placeholder="100">
+            </div>
+
+            <div id="imageFields">
+                <label for="frame">帧位置:</label>
+                <input type="text" id="frame" name="frame" placeholder="例如：10">
+            </div>
+
+            <label for="resolution_width">分辨率宽度:</label>
+            <input type="text" id="resolution_width" name="resolution_width" placeholder="1920">
+            <label for="resolution_height">分辨率高度:</label>
+            <input type="text" id="resolution_height" name="resolution_height" placeholder="1080">
+            <label for="samples">采样率:</label>
+            <input type="text" id="samples" name="samples" placeholder="例如：100">
+        </div>
+        <input type="submit" value="开始渲染">
+
+        <div id="renderList">
+            <h2>渲染列表</h2>
+            <script src="//cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+            <script>
+                document.addEventListener('DOMContentLoaded', function () {
+                    var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
+                    socket.on('connect', function () {
+                        console.log('WebSocket Connected');
+                    });
+                    socket.on('update_status', function (msg) {
+                        var statusList = document.getElementById('renderStatus');
+                        var newItem = document.createElement('li');
+                        newItem.textContent = msg.data;
+                        statusList.appendChild(newItem);
+                    });
+                });
+            </script>
+            <!-- 渲染状态将显示在这里 -->
+            <ul id="renderStatus"></ul>
+        </div>
+    </form>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const blendFileInput = document.getElementById('blend-file');
+            const fileListContainer = document.getElementById('file-list');
+            const optionalFields = document.getElementById('optionalFields');
+            const animationFields = document.getElementById('animationFields');
+            const imageFields = document.getElementById('imageFields');
+            const renderStatusList = document.getElementById('renderStatus');
+            const uploadForm = document.getElementById('uploadForm');
+
+            blendFileInput.addEventListener('change', () => updateInputLabel(blendFileInput));
+
+            setupDragAndDrop(blendFileInput);
+
+            ['file-upload', 'folder-upload'].forEach(id => {
+                document.getElementById(id).addEventListener('change', handleUploads);
+            });
+
+            uploadForm.onsubmit = handleFormSubmission;
+
+            var uploadedItems = []; // 通用存储，包括文件和文件夹信息
+            function updateFileList() {
+                fileListContainer.innerHTML = ''; // 清空现有列表
+
+                uploadedItems.forEach(function (item, index) {
+                    var listItem = document.createElement('div');
+                    listItem.textContent = item.name; // 文件或文件夹名称
+                    var deleteButton = document.createElement('button');
+                    deleteButton.textContent = '删除';
+                    deleteButton.onclick = function () {
+                        uploadedItems.splice(index, 1); // 删除条目
+                        updateFileList(); // 刷新列表
+                    };
+                    listItem.appendChild(deleteButton);
+                    fileListContainer.appendChild(listItem);
+                });
+            }
+
+            function handleUploads(event) {
+                const files = Array.from(event.target.files);
+                const isFolder = event.target.id === 'folder-upload';
+                if (isFolder) {
+                    const folderName = files[0].webkitRelativePath.split('/')[0];
+                    uploadedItems.push({
+                        type: 'folder',
+                        name: folderName,
+                        files
+                    });
+                } else {
+                    files.forEach(file => {
+                        uploadedItems.push({ type: 'file', name: file.name, file });
+                    });
+                }
+                updateFileList();
+            }
+
+            function setupDragAndDrop(inputElement) {
+                const label = document.querySelector('.file-input-label');
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                    inputElement.addEventListener(eventName, preventDefaults, false);
+                    label.addEventListener(eventName, preventDefaults, false);
+                });
+
+                ['dragenter', 'dragover'].forEach(eventName => {
+                    label.addEventListener(eventName, () => label.classList.add('highlight'), false);
+                });
+
+                ['dragleave', 'drop'].forEach(eventName => {
+                    label.addEventListener(eventName, () => label.classList.remove('highlight'), false);
+                });
+
+                label.addEventListener('drop', e => {
+                    inputElement.files = e.dataTransfer.files;
+                    updateInputLabel(inputElement);
+                });
+            }
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            function updateInputLabel(input) {
+                const label = document.querySelector('.file-input-label');
+                label.textContent = input.files.length > 0 ? input.files[0].name : '拖入或点击上传一个 .blend 文件';
+                if (!label.querySelector('.upload-icon')) label.appendChild(document.createElement('i')).className = 'upload-icon';
+                label.querySelector('.upload-icon').textContent = '📁';
+            }
+
+            document.querySelectorAll('input[name="render_type"]').forEach(input => {
+                input.addEventListener('change', () => {
+                    animationFields.classList.toggle('hide', input.value !== 'animation');
+                    imageFields.classList.toggle('hide', input.value === 'animation');
+                });
+            });
+
+            document.getElementById('optionalSettings').addEventListener('change', () => {
+                optionalFields.classList.toggle('hide');
+            });
+
+            function handleFormSubmission(event) {
+                event.preventDefault();
+                if (blendFileInput.files.length > 0) {
+                    const fileName = blendFileInput.files[0].name;
+                    renderStatusList.innerHTML += `<li>文件: ${fileName}, 状态: 渲染开始...</li>`;
+                }
+
+                const data = new FormData(event.target);
+
+                // 添加附加的文件
+                uploadedItems.forEach(item => {
+                    if (item.type === 'file') {
+                        data.append('file[]', item.file, item.file.name);
+                    } else if (item.type === 'folder') {
+                        item.files.forEach(file => {
+                            // 这里假设文件对象结构允许直接引用，根据实际情况调整
+                            data.append('folder', file, file.webkitRelativePath);
+                        });
+                    }
+                });
+
+                // 加入其他可能需要的表单数据
+                [...document.querySelectorAll('#optionalFields input')].forEach(input => {
+                    if (input.type === 'text' || input.type === 'checkbox') {
+                        data.append(input.name, input.value);
+                    }
+                });
+
+                fetch('/upload', { method: 'POST', body: data })
+                    .then(response => response.json())
+                    .then(data => updateRenderList(data))
+                    .catch(error => console.error('Error:', error));
+            }
+
+            function updateRenderList(data) {
+                const decodedFilename = decodeURIComponent(data.filename);
+                renderStatusList.innerHTML += `<li><a href="${data.url}" target="_blank">文件：${decodedFilename}, 状态：${data.status}。<br><span class="selectable">${data.url}</span></a></li>`;
+            }
+        });
+
+        function toggleRenderType() {
+            var renderType = document.querySelector('input[name="render_type"]:checked').value;
+            var animationFields = document.getElementById('animationFields');
+            var imageFields = document.getElementById('imageFields');
+            if (renderType === 'animation') {
+                animationFields.classList.remove('hide');
+                imageFields.classList.add('hide');
+            } else {
+                animationFields.classList.add('hide');
+                imageFields.classList.remove('hide');
+            }
+        }
+
+        function toggleOptionalSettings() {
+            var optionalFields = document.getElementById('optionalFields');
+            optionalFields.classList.toggle('hide');
+        }
+
+        var blendFileInput = document.getElementById('blend-file');
+        blendFileInput.addEventListener('dragover', function (event) {
+            event.preventDefault();
+            document.querySelector('.file-input-label').classList.add('dragover');
+        });
+
+        blendFileInput.addEventListener('dragleave', function (event) {
+            document.querySelector('.file-input-label').classList.remove('dragover');
+        });
+
+        blendFileInput.addEventListener('drop', function (event) {
+            event.preventDefault();
+            document.querySelector('.file-input-label').classList.remove('dragover');
+            var files = event.dataTransfer.files;
+            if (files.length > 0) {
+                blendFileInput.files = files;
+            }
+        });
+
+        document.getElementById('uploadForm').onsubmit = function (event) {
+            event.preventDefault();  // 阻止表单默认提交行为
+
+            // 显示渲染开始的信息
+            var list = document.getElementById('renderStatus');
+            var listItem = document.createElement('li');
+            var blendFileInput = document.getElementById('blend-file');
+            if (blendFileInput.files.length > 0) {
+                var fileName = blendFileInput.files[0].name;
+                listItem.textContent = `文件: ${fileName}, 状态: 渲染开始...`;
+                list.appendChild(listItem);
+            }
+
+            var data = new FormData(this); // 收集表单数据
+
+            // 使用fetch API进行异步文件上传
+            fetch('/upload', {
+                method: 'POST',
+                body: data,
+            })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Success:', data);
+                    updateRenderList(data); // 更新渲染列表
+                })
+                .catch((error) => {
+                    console.error('Error:', error);
+                });
+        };
+
+        function updateRenderList(data) {
+            // 解码文件名
+            var decodedFilename = decodeURIComponent(data.filename);
+            // 使用解码后的文件名创建超链接
+            var list = document.getElementById('renderStatus');
+            var listItem = document.createElement('li');
+            var link = document.createElement('a');
+            // 使用相对路径
+            link.setAttribute('href', data.url); // 超链接
+            link.setAttribute('target', "_blank"); // 新标签页打开
+            link.innerHTML = `文件：${decodedFilename}, 状态：${data.status}。<br>\n<span class="selectable">${data.url}</span>`; // 添加超链接文本内容
+            listItem.appendChild(link);
+            list.appendChild(listItem);
+        }
+
+    </script>
+</body>
+
+</html>
